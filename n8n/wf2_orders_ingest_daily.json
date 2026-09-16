@@ -1,0 +1,206 @@
+{
+  "name": "marketplace_orders_ingest_daily",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "days" }
+          ]
+        }
+      },
+      "id": "w2-trigger",
+      "name": "Schedule quotidien",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "date_cible",
+              "name": "date_cible",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w2-date",
+      "name": "Date cible",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [20, 300],
+      "notes": "Date du run (equivalent {{ ds }}). Pour rejouer une date passee (US-06) : remplacer par une date fixe 'YYYY-MM-DD'."
+    },
+    {
+      "parameters": {
+        "url": "=http://api-marketplace:5000/orders?date={{ $('Date cible').item.json.date_cible }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "w2-http-orders",
+      "name": "GET orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "", "name": "Marketplace API" }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const d = $input.all()[0].json;\nconst dt = d.date;\nconst orders = d.orders || [];\nconst raw = JSON.stringify(d, null, 2);\nconst vals = orders.map(o => `('${o.order_id}','${o.dt}','${o.customer_id}','${o.seller_id}','${o.product_id}',${o.quantity},${o.unit_price},${o.total},${o.commission},'${o.status}')`);\nconst cols = 'order_id, dt, seller_id, product_id, customer_id, quantity, unit_price, total, commission, status';\nconst loadFact = `INSERT INTO dwh.fact_orders (${cols}) SELECT s.${cols.split(', ').join(', s.')} FROM staging.orders s JOIN dwh.dim_seller ds ON ds.seller_id = s.seller_id JOIN dwh.dim_product dp ON dp.product_id = s.product_id WHERE s.dt = '${dt}';`;\nconst summary = `INSERT INTO analytics.daily_summary (dt, total_orders, total_revenue, avg_basket, total_commission, top_seller_id) SELECT f.dt, COUNT(*), SUM(f.total), ROUND(AVG(f.total),2), SUM(f.commission), (SELECT f2.seller_id FROM dwh.fact_orders f2 WHERE f2.dt = f.dt AND f2.status <> 'cancelled' GROUP BY f2.seller_id ORDER BY SUM(f2.total) DESC LIMIT 1) FROM dwh.fact_orders f WHERE f.dt = '${dt}' AND f.status <> 'cancelled' GROUP BY f.dt ON CONFLICT (dt) DO UPDATE SET total_orders=EXCLUDED.total_orders, total_revenue=EXCLUDED.total_revenue, avg_basket=EXCLUDED.avg_basket, total_commission=EXCLUDED.total_commission, top_seller_id=EXCLUDED.top_seller_id;`;\nconst sellerDaily = `INSERT INTO analytics.seller_daily (dt, seller_id, nb_orders, revenue, commission) SELECT f.dt, f.seller_id, COUNT(*), SUM(f.total), SUM(f.commission) FROM dwh.fact_orders f WHERE f.dt = '${dt}' AND f.status <> 'cancelled' GROUP BY f.dt, f.seller_id ON CONFLICT (dt, seller_id) DO UPDATE SET nb_orders=EXCLUDED.nb_orders, revenue=EXCLUDED.revenue, commission=EXCLUDED.commission;`;\nconst catDaily = `INSERT INTO analytics.category_daily (dt, category, nb_orders, revenue) SELECT f.dt, dp.category, COUNT(*), SUM(f.total) FROM dwh.fact_orders f JOIN dwh.dim_product dp ON dp.product_id = f.product_id WHERE f.dt = '${dt}' AND f.status <> 'cancelled' GROUP BY f.dt, dp.category ON CONFLICT (dt, category) DO UPDATE SET nb_orders=EXCLUDED.nb_orders, revenue=EXCLUDED.revenue;`;\nconst log = `INSERT INTO staging.file_ingestion_log (object_key, bucket_name, source, status, message) VALUES ('raw/orders/dt=${dt}/orders.json', 'data-lake', 'api-marketplace', 'SUCCESS', '${orders.length} commandes');`;\nreturn [{ json: {\n  dt, nb_orders: orders.length,\n  raw_content: raw,\n  raw_key: `raw/orders/dt=${dt}/orders.json`,\n  purge_staging: `DELETE FROM staging.orders WHERE dt='${dt}';`,\n  staging_insert: `INSERT INTO staging.orders (order_id, dt, customer_id, seller_id, product_id, quantity, unit_price, total, commission, status) VALUES ${vals.join(',')};`,\n  purge_fact: `DELETE FROM dwh.fact_orders WHERE dt='${dt}';`,\n  load_fact: loadFact,\n  upsert_summary: summary,\n  upsert_seller_daily: sellerDaily,\n  upsert_category_daily: catDaily,\n  log_ingestion: log\n} }];"
+      },
+      "id": "w2-prepare",
+      "name": "Preparer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "data-lake",
+        "fileName": "={{ $('Preparer').item.json.raw_key }}",
+        "binaryData": false,
+        "fileContent": "={{ $('Preparer').item.json.raw_content }}",
+        "additionalFields": {}
+      },
+      "id": "w2-s3-raw",
+      "name": "Upload raw MinIO",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "s3": { "id": "", "name": "MinIO S3" }
+      },
+      "notes": "Raw layer : JSON brut archive dans data-lake (rejouable sans re-appeler l'API)."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Preparer').item.json.purge_staging }}",
+        "options": {}
+      },
+      "id": "w2-pg-purge-staging",
+      "name": "Purger staging (dt)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [900, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Preparer').item.json.staging_insert }}",
+        "options": {}
+      },
+      "id": "w2-pg-load-staging",
+      "name": "Charger staging",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1120, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Preparer').item.json.purge_fact }}",
+        "options": {}
+      },
+      "id": "w2-pg-purge-fact",
+      "name": "Purger fact (dt)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1340, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      },
+      "notes": "Pattern idempotent obligatoire : DELETE + INSERT par partition dt."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Preparer').item.json.load_fact }}",
+        "options": {}
+      },
+      "id": "w2-pg-load-fact",
+      "name": "Alimenter fact_orders",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1560, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const p = $('Preparer').item.json;\nreturn [{ json: { dt: p.dt, upsert_summary: p.upsert_summary, upsert_seller_daily: p.upsert_seller_daily, upsert_category_daily: p.upsert_category_daily } }];"
+      },
+      "id": "w2-to-analytics",
+      "name": "Vers analytics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 300],
+      "notes": "Transmet les requetes d'agregation au sous-workflow wf4."
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "", "mode": "list" },
+        "options": {}
+      },
+      "id": "w2-exec-agg",
+      "name": "Agreger analytics",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [2000, 300],
+      "notes": "Selectionner le workflow 'marketplace_analytics_aggregate_daily' (wf4). Decouplage equivalent au DAG asset-scheduled du CDC."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Preparer').item.json.log_ingestion }}",
+        "options": {}
+      },
+      "id": "w2-pg-log",
+      "name": "Journaliser ingestion",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2440, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule quotidien": { "main": [[{ "node": "Date cible", "type": "main", "index": 0 }]] },
+    "Date cible": { "main": [[{ "node": "GET orders", "type": "main", "index": 0 }]] },
+    "GET orders": { "main": [[{ "node": "Preparer", "type": "main", "index": 0 }]] },
+    "Preparer": { "main": [[{ "node": "Upload raw MinIO", "type": "main", "index": 0 }]] },
+    "Upload raw MinIO": { "main": [[{ "node": "Purger staging (dt)", "type": "main", "index": 0 }]] },
+    "Purger staging (dt)": { "main": [[{ "node": "Charger staging", "type": "main", "index": 0 }]] },
+    "Charger staging": { "main": [[{ "node": "Purger fact (dt)", "type": "main", "index": 0 }]] },
+    "Purger fact (dt)": { "main": [[{ "node": "Alimenter fact_orders", "type": "main", "index": 0 }]] },
+    "Alimenter fact_orders": { "main": [[{ "node": "Vers analytics", "type": "main", "index": 0 }]] },
+    "Vers analytics": { "main": [[{ "node": "Agreger analytics", "type": "main", "index": 0 }]] },
+    "Agreger analytics": { "main": [[{ "node": "Journaliser ingestion", "type": "main", "index": 0 }]] }
+  }
+}

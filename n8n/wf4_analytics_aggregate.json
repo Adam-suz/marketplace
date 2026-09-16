@@ -1,0 +1,68 @@
+{
+  "name": "marketplace_analytics_aggregate_daily",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "w4-trigger",
+      "name": "Appele par wf2",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [-200, 300],
+      "notes": "Declenche par le noeud 'Agreger analytics' de wf2 (equivalent de l'asset-scheduling Airflow : se lance apres le load des faits). Recoit en entree les champs upsert_* construits par le noeud 'Preparer' de wf2."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.upsert_summary }}",
+        "options": {}
+      },
+      "id": "w4-pg-summary",
+      "name": "Refresh daily_summary",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [20, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.upsert_seller_daily }}",
+        "options": {}
+      },
+      "id": "w4-pg-seller-daily",
+      "name": "Refresh seller_daily",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [240, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.upsert_category_daily }}",
+        "options": {}
+      },
+      "id": "w4-pg-cat-daily",
+      "name": "Refresh category_daily",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    }
+  ],
+  "connections": {
+    "Appele par wf2": { "main": [[{ "node": "Refresh daily_summary", "type": "main", "index": 0 }]] },
+    "Refresh daily_summary": { "main": [[{ "node": "Refresh seller_daily", "type": "main", "index": 0 }]] },
+    "Refresh seller_daily": { "main": [[{ "node": "Refresh category_daily", "type": "main", "index": 0 }]] }
+  }
+}

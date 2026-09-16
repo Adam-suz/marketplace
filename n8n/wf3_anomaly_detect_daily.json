@@ -1,0 +1,102 @@
+{
+  "name": "marketplace_anomaly_detect_daily",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "days" }
+          ]
+        }
+      },
+      "id": "w3-trigger",
+      "name": "Schedule quotidien",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH last_day AS (SELECT max(dt) AS dt FROM analytics.daily_summary), moy AS (SELECT AVG(total_revenue) AS avg7 FROM analytics.daily_summary WHERE dt >= (SELECT dt FROM last_day) - 7 AND dt < (SELECT dt FROM last_day)) SELECT s.dt, s.total_revenue, ROUND(moy.avg7, 2) AS avg7, ROUND(s.total_revenue / NULLIF(moy.avg7, 0), 3) AS ratio FROM analytics.daily_summary s, moy, last_day l WHERE s.dt = l.dt;",
+        "options": {}
+      },
+      "id": "w3-pg-ratio",
+      "name": "CA vs moyenne 7j",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [20, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      },
+      "notes": "ratio = CA du dernier jour / moyenne mobile des 7 jours precedents."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-ratio",
+              "leftValue": "={{ $json.ratio }}",
+              "rightValue": 0.7,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "w3-if",
+      "name": "CA < 70% moyenne ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "notes": "US-05 : alerte si le CA du jour < 70% de la moyenne sur 7 jours."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO analytics.alerts (dt, alert_type, message) VALUES ('{{ $('CA vs moyenne 7j').item.json.dt }}', 'CA_DROP', 'CA {{ $('CA vs moyenne 7j').item.json.total_revenue }} EUR = {{ $('CA vs moyenne 7j').item.json.ratio }} x moyenne 7j ({{ $('CA vs moyenne 7j').item.json.avg7 }} EUR)');",
+        "options": {}
+      },
+      "id": "w3-pg-alert",
+      "name": "Enregistrer alerte",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [460, 200],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "w3-noop",
+      "name": "RAS",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [460, 400]
+    }
+  ],
+  "connections": {
+    "Schedule quotidien": { "main": [[{ "node": "CA vs moyenne 7j", "type": "main", "index": 0 }]] },
+    "CA vs moyenne 7j": { "main": [[{ "node": "CA < 70% moyenne ?", "type": "main", "index": 0 }]] },
+    "CA < 70% moyenne ?": {
+      "main": [
+        [{ "node": "Enregistrer alerte", "type": "main", "index": 0 }],
+        [{ "node": "RAS", "type": "main", "index": 0 }]
+      ]
+    }
+  }
+}

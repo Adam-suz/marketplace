@@ -1,0 +1,117 @@
+{
+  "name": "marketplace_dims_refresh_daily",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "days" }
+          ]
+        }
+      },
+      "id": "w1-trigger",
+      "name": "Schedule quotidien",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://api-marketplace:5000/sellers",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "w1-http-sellers",
+      "name": "GET sellers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [20, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "", "name": "Marketplace API" }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const sellers = $input.all()[0].json.sellers || [];\nconst esc = v => String(v).replace(/'/g, \"''\");\nconst vals = sellers.map(s => `('${s.seller_id}','${esc(s.name)}','${s.country}','${esc(s.city)}','${s.joined_date}',${s.rating})`);\nconst query = `INSERT INTO dwh.dim_seller (seller_id, name, country, city, joined_date, rating) VALUES ${vals.join(',')} ON CONFLICT (seller_id) DO UPDATE SET name=EXCLUDED.name, country=EXCLUDED.country, city=EXCLUDED.city, joined_date=EXCLUDED.joined_date, rating=EXCLUDED.rating;`;\nreturn [{ json: { query, nb_sellers: sellers.length } }];"
+      },
+      "id": "w1-prep-sellers",
+      "name": "Preparer dim_seller",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Preparer dim_seller').item.json.query }}",
+        "options": {}
+      },
+      "id": "w1-pg-sellers",
+      "name": "Upsert dim_seller",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://api-marketplace:5000/products",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "w1-http-products",
+      "name": "GET products",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "", "name": "Marketplace API" }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const products = $input.all()[0].json.products || [];\nconst esc = v => String(v).replace(/'/g, \"''\");\nconst vals = products.map(p => `('${p.product_id}','${esc(p.name)}','${esc(p.category)}',${p.price},'${p.seller_id}')`);\nconst query = `INSERT INTO dwh.dim_product (product_id, name, category, price, seller_id) VALUES ${vals.join(',')} ON CONFLICT (product_id) DO UPDATE SET name=EXCLUDED.name, category=EXCLUDED.category, price=EXCLUDED.price, seller_id=EXCLUDED.seller_id;`;\nreturn [{ json: { query, nb_products: products.length } }];"
+      },
+      "id": "w1-prep-products",
+      "name": "Preparer dim_product",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $('Preparer dim_product').item.json.query }}",
+        "options": {}
+      },
+      "id": "w1-pg-products",
+      "name": "Upsert dim_product",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1120, 300],
+      "credentials": {
+        "postgres": { "id": "", "name": "Postgres DWH" }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule quotidien": { "main": [[{ "node": "GET sellers", "type": "main", "index": 0 }]] },
+    "GET sellers": { "main": [[{ "node": "Preparer dim_seller", "type": "main", "index": 0 }]] },
+    "Preparer dim_seller": { "main": [[{ "node": "Upsert dim_seller", "type": "main", "index": 0 }]] },
+    "Upsert dim_seller": { "main": [[{ "node": "GET products", "type": "main", "index": 0 }]] },
+    "GET products": { "main": [[{ "node": "Preparer dim_product", "type": "main", "index": 0 }]] },
+    "Preparer dim_product": { "main": [[{ "node": "Upsert dim_product", "type": "main", "index": 0 }]] }
+  }
+}
