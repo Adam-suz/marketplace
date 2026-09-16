@@ -189,15 +189,22 @@ pytest tests/ -v        # 13 tests
 
 ## Metabase
 
-1. http://localhost:3000 → créer le compte admin.
-2. Ajouter une source : **PostgreSQL**, Host = `postgres-dwh` (nom Docker, pas
-   localhost), Port = `5432` (port **interne**, pas 5433), DB = `dwh`,
-   user `dwh_user` / `dwh_password`.
-3. Dashboards à créer (schéma `analytics` requêtable directement) :
-   - **Executive Summary** : CA total du jour (big number), courbe CA 30j
-     (`daily_summary`), top 5 vendeurs (`seller_daily` + `dim_seller`)
-   - **Top Sellers** : top 10 vendeurs du mois, évolution CA top 3, vendeurs
-     inactifs > 7j
+Setup automatique (compte admin + connexion DWH + 3 dashboards) :
+
+```bash
+python scripts/setup_metabase.py
+# -> http://localhost:3000  (admin@maelys.local / Admin2026!)
+```
+
+Dashboards créés :
+- **Executive Summary** : CA du jour (KPI), courbe CA 30j, top 5 vendeurs
+- **Top Sellers** : top 10 vendeurs du mois, évolution CA top 3, vendeurs
+  inactifs > 7 jours
+- **Finance & Catalogue** (bonus) : commissions par jour, CA par catégorie
+
+Pour le faire à la main à la place : connexion PostgreSQL, host
+`postgres-dwh` (nom Docker, pas localhost), port **interne** `5432`,
+db `dwh`, `dwh_user` / `dwh_password`, puis requêter `analytics.*`.
 
 ## Modèle de données
 
