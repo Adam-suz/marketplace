@@ -60,7 +60,8 @@ marketplace/
 │   ├── wf3_anomaly_detect_daily.json  # bonus : alerte si CA < 70% moyenne 7j
 │   └── wf4_analytics_aggregate.json   # agrégats analytics (appelé par wf2)
 ├── scripts/
-│   └── verifier.sh         # vérifs services + idempotence
+│   ├── verifier.sh         # vérifs services + idempotence
+│   └── setup_metabase.py   # setup Metabase auto (compte, DWH, dashboards)
 └── tests/
     ├── test_api.py         # tests pytest sur l'API (7 tests)
     └── test_workflows.py   # tests pytest sur les workflows n8n (6 tests)
@@ -246,6 +247,8 @@ erDiagram
 | Piège | Solution |
 |-------|----------|
 | Test credential S3 "Forbidden" | Normal (test AWS STS) → sauvegarder quand même |
+| S3 "connection cannot be established" | Activer **Force Path Style** dans le credential S3 (sinon n8n tape `bucket.minio` en virtual-host) |
+| wf4 : "Failed query: undefined" | Le trigger `executeWorkflowTrigger` doit être en mode **"Accept all input data"** — et ne jamais lancer wf4 à la main (il reçoit ses requêtes de wf2) |
 | Metabase "cannot connect" | Host = `postgres-dwh`, port **interne** `5432` |
 | Dashboards perdus au `down -v` | Volume `metabase-data` (déjà dans le compose) |
 | Port 9000 occupé (ClickHouse tp1) | Remapper MinIO : `9010:9000` / `9011:9001` |
