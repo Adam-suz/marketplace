@@ -3,8 +3,19 @@
   "nodes": [
     {
       "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "w4-trigger",
+      "name": "Appele par wf2",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-200, 300],
+      "notes": "Declenche par le noeud 'Agreger analytics' de wf2 (equivalent de l'asset-scheduling Airflow : se lance apres le load des faits). Recoit en entree les champs upsert_* construits par le noeud 'Preparer' de wf2."
+    },
+    {
+      "parameters": {
         "operation": "executeQuery",
-        "query": "{{ $json.upsert_summary }}",
+        "query": "={{ $('Appele par wf2').item.json.upsert_summary }}",
         "options": {}
       },
       "id": "d56ce8bd-f999-43e8-94e8-7f4a66fc2b29",
@@ -25,7 +36,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "{{ $json.upsert_seller_daily }}",
+        "query": "={{ $('Appele par wf2').item.json.upsert_seller_daily }}",
         "options": {}
       },
       "id": "4c7f5bea-6af3-4fba-a5ff-358cc7148289",
@@ -46,7 +57,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "{{ $json.upsert_category_daily }}",
+        "query": "={{ $('Appele par wf2').item.json.upsert_category_daily }}",
         "options": {}
       },
       "id": "fcd62668-7752-45d0-ba81-eb346956cb1c",

@@ -60,7 +60,8 @@ marketplace/
 │   ├── wf3_anomaly_detect_daily.json  # bonus : alerte si CA < 70% moyenne 7j
 │   └── wf4_analytics_aggregate.json   # agrégats analytics (appelé par wf2)
 ├── scripts/
-│   └── verifier.sh         # vérifs services + idempotence
+│   ├── verifier.sh         # vérifs services + idempotence
+│   └── setup_metabase.py   # setup Metabase auto (compte, DWH, dashboards)
 └── tests/
     ├── test_api.py         # tests pytest sur l'API (7 tests)
     └── test_workflows.py   # tests pytest sur les workflows n8n (6 tests)
@@ -122,16 +123,25 @@ Ce que fait wf2 :
 
 ```
 Schedule → Date cible (= {{ ds }})
-  → GET /orders?date=...           (Header Auth)
-  → Preparer                       (construit les requêtes SQL)
+  → GET /orders?date=...           (Header Auth, ~8 500 lignes)
+  → Preparer                       (construit les requêtes SQL, chunks de 3 000)
   → Upload raw MinIO               (data-lake/raw/orders/dt=YYYY-MM-DD/orders.json)
   → DELETE staging.orders WHERE dt (purge partition)
-  → INSERT staging.orders          (load)
+  → Batcher staging                (émet 1 item par chunk d'INSERT)
+  → INSERT staging.orders          (s'exécute une fois par chunk)
+  → Fin staging                    (re-compacte en 1 item — évite de rejouer les faits)
   → DELETE dwh.fact_orders WHERE dt
   → INSERT dwh.fact_orders         (transform, jointures dims)
   → Execute Workflow → wf4         (UPSERT daily_summary / seller_daily / category_daily)
   → INSERT file_ingestion_log
 ```
+
+> **Batching** : à ~8 500 commandes/jour, un seul `INSERT` géant serait trop lourd
+> (taille de requête). `Preparer` découpe en chunks, `Batcher staging` émet un
+> item par chunk → le nœud Postgres s'exécute une fois par chunk.
+> `Fin staging` re-compacte en **1 item** : sans lui, les nœuds suivants se
+> ré-exécuteraient une fois par chunk et `INSERT fact_orders` tournerait 3 fois
+> → triplons malgré le DELETE+INSERT.
 
 wf4 est découplé de wf2 (déclenché par `Execute Workflow Trigger`) : c'est
 l'équivalent du DAG `marketplace_analytics_aggregate_daily` "asset-scheduled"
@@ -189,15 +199,27 @@ pytest tests/ -v        # 13 tests
 
 ## Metabase
 
-1. http://localhost:3000 → créer le compte admin.
-2. Ajouter une source : **PostgreSQL**, Host = `postgres-dwh` (nom Docker, pas
-   localhost), Port = `5432` (port **interne**, pas 5433), DB = `dwh`,
-   user `dwh_user` / `dwh_password`.
-3. Dashboards à créer (schéma `analytics` requêtable directement) :
-   - **Executive Summary** : CA total du jour (big number), courbe CA 30j
-     (`daily_summary`), top 5 vendeurs (`seller_daily` + `dim_seller`)
-   - **Top Sellers** : top 10 vendeurs du mois, évolution CA top 3, vendeurs
-     inactifs > 7j
+Setup automatique (compte admin + connexion DWH + 3 dashboards) :
+
+```bash
+python scripts/setup_metabase.py
+# -> http://localhost:3000  (admin@maelys.local / Admin2026!)
+```
+
+Dashboards créés :
+- **Executive Summary** : CA du jour (KPI), courbe CA 30j, top 5 vendeurs
+- **Top Sellers** : top 10 vendeurs du mois, évolution CA top 3, vendeurs
+  inactifs > 7 jours
+- **Finance & Catalogue** (bonus) : commissions par jour, CA par catégorie
+- **Fraude potentielle** : nb de commandes à prix suspect (écart > 15 % vs
+  catalogue), top 50 des écarts de prix, vendeurs à fort taux d'annulation
+  (> 25 % vs ~5 % en moyenne). L'API injecte ~2 % de commandes à prix
+  anormal et 5 vendeurs "fraudeurs" (~60 % d'annulations) de façon
+  déterministe — le dashboard les détecte réellement.
+
+Pour le faire à la main à la place : connexion PostgreSQL, host
+`postgres-dwh` (nom Docker, pas localhost), port **interne** `5432`,
+db `dwh`, `dwh_user` / `dwh_password`, puis requêter `analytics.*`.
 
 ## Modèle de données
 
@@ -231,14 +253,25 @@ erDiagram
 - **MinIO en raw layer** : le JSON brut est rejouable si la transform a un bug,
   sans re-solliciter l'API (pattern data lake first, cf. TP5/TP6).
 - **API déterministe** (`seed = md5(date)`) : permet de prouver l'idempotence.
-- Volumétrie réduite (~80-200 commandes/jour, 200 vendeurs, 500 produits) :
-  suffisant pour démontrer le pipeline sans charger la machine.
+- **Volumétrie réelle du cahier des charges** : 2 400 vendeurs, 180 000
+  produits, ~8 500 commandes/jour, CA ~140 k€/jour ≈ 4,2 M€/mois
+  (panier moyen ~17 €). wf1 insère les produits par chunks de 2 000 (~90
+  requêtes) et wf2 le staging par chunks de 3 000 : à ce volume, un INSERT
+  unique dépasserait les limites raisonnables de taille de requête.
+- **API déterministe** (`seed = md5(date)`) : permet de prouver l'idempotence
+  — vérifié : 2 runs wf2 sur la même date → `COUNT(*)` stable à 8 933.
+- **Fraude simulée** : l'API injecte ~1,5 % de prix bradés (x0,4-0,75), ~0,5 %
+  de prix gonflés (x1,6-2,5) et 5 vendeurs à ~60 % d'annulations. Détectable
+  via `fact_orders.unit_price` vs `dim_product.price` et le taux de
+  `cancelled` par vendeur — cf. dashboard "Fraude potentielle".
 
 ## Pièges connus (retours TP6 + énoncé)
 
 | Piège | Solution |
 |-------|----------|
 | Test credential S3 "Forbidden" | Normal (test AWS STS) → sauvegarder quand même |
+| S3 "connection cannot be established" | Activer **Force Path Style** dans le credential S3 (sinon n8n tape `bucket.minio` en virtual-host) |
+| wf4 : "Failed query: undefined" | Le trigger `executeWorkflowTrigger` doit être en mode **"Accept all input data"** — et ne jamais lancer wf4 à la main (il reçoit ses requêtes de wf2) |
 | Metabase "cannot connect" | Host = `postgres-dwh`, port **interne** `5432` |
 | Dashboards perdus au `down -v` | Volume `metabase-data` (déjà dans le compose) |
 | Port 9000 occupé (ClickHouse tp1) | Remapper MinIO : `9010:9000` / `9011:9001` |

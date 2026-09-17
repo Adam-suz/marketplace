@@ -43,6 +43,11 @@ PRODUCT_WORDS = [
     "Echarpe", "Carnet", "Bracelet", "Huile", "Poster", "Gourde", "Savon",
     "Miroir", "Coussin", "Panier", "Collier", "Plaid",
 ]
+PRODUCT_ADJECTIVES = [
+    "bleu", "rouge", "vert", "nature", "dore", "argent", "vintage",
+    "bio", "artisanal", "minimaliste", "lin", "chene", "cuir", "coton",
+    "ceramique", "pastel", "nordique", "industriel", "floral", "graphique",
+]
 FIRST_NAMES = [
     "Alice", "Bruno", "Chloe", "David", "Emma", "Felix", "Gaelle", "Hugo",
     "Ines", "Jules", "Karim", "Lea", "Marc", "Nina", "Oscar", "Pauline",
@@ -52,9 +57,17 @@ LAST_NAMES = [
     "Simon", "Laurent", "Michel", "David", "Roux", "Fournier", "Girard",
 ]
 
-NB_SELLERS = 200
-NB_PRODUCTS = 500
-NB_CUSTOMERS = 800
+# Volumetrie du cahier des charges : 2400 vendeurs, 180k produits,
+# ~8500 commandes/jour, ~4.2 MEUR de CA mensuel.
+NB_SELLERS = 2400
+NB_PRODUCTS = 180_000
+NB_CUSTOMERS = 25_000
+
+# Comportements suspects injectes (deterministes) pour alimenter le
+# dashboard "Fraude potentielle" : ~2% de commandes a prix anormal
+# (trop bas / gonfle) + 5 vendeurs tires au sort (seed fixe) avec un
+# taux d'annulation anormal (~60% vs ~5%).
+NB_FRAUD_SELLERS = 5
 
 
 def _rng(key: str) -> random.Random:
@@ -98,10 +111,13 @@ def _gen_products(sellers: list[dict]) -> list[dict]:
             {
                 "product_id": f"P{i:04d}",
                 "name": (
-                    f"{r.choice(PRODUCT_WORDS)} {r.choice(SHOP_NAMES).lower()}"
+                    f"{r.choice(PRODUCT_WORDS)} "
+                    f"{r.choice(PRODUCT_ADJECTIVES)}"
                 ),
                 "category": r.choice(CATEGORIES),
-                "price": round(r.uniform(5.0, 300.0), 2),
+                # prix bas/moyen -> panier moyen ~17 EUR, coherent avec
+                # ~8500 cmd/jour et ~4.2 MEUR de CA mensuel
+                "price": round(r.uniform(3.0, 20.0), 2),
                 "seller_id": seller["seller_id"],
             }
         )
@@ -129,6 +145,10 @@ SELLERS = _gen_sellers()
 PRODUCTS = _gen_products(SELLERS)
 CUSTOMERS = _gen_customers()
 _PRODUCT_BY_ID = {p["product_id"]: p for p in PRODUCTS}
+# Tirage seede -> toujours les memes "fraudeurs" a chaque demarrage
+FRAUD_SELLERS = {
+    s["seller_id"] for s in _rng("fraud_sellers").sample(SELLERS, NB_FRAUD_SELLERS)
+}
 
 
 # ---------------------------------------------------------------------------
@@ -186,15 +206,28 @@ def orders():
         return jsonify({"error": "parametre 'date' requis (YYYY-MM-DD)"}), 400
 
     r = _rng(f"orders:{date}")
-    n_orders = 80 + r.randint(0, 120)  # 80 a 200 commandes/jour
+    n_orders = 8000 + r.randint(0, 1000)  # ~8500 commandes/jour
     orders = []
     for i in range(1, n_orders + 1):
         product = r.choice(PRODUCTS)
         customer = r.choice(CUSTOMERS)
-        qty = r.randint(1, 4)
-        # prix parfois remise ou majoration legere
-        unit_price = round(product["price"] * r.uniform(0.9, 1.1), 2)
+        qty = r.randint(1, 2)
+        # prix parfois remise ou majoration legere (+-10%)
+        # ~2% de prix anormaux : brade (x0.4-0.75) ou gonfle (x1.6-2.5)
+        roll = r.random()
+        if roll < 0.015:
+            unit_price = round(product["price"] * r.uniform(0.4, 0.75), 2)
+        elif roll < 0.02:
+            unit_price = round(product["price"] * r.uniform(1.6, 2.5), 2)
+        else:
+            unit_price = round(product["price"] * r.uniform(0.9, 1.1), 2)
         total = round(unit_price * qty, 2)
+        # les vendeurs "fraudeurs" annulent ~60% de leurs commandes
+        status_weights = (
+            [30, 5, 5, 60]
+            if product["seller_id"] in FRAUD_SELLERS
+            else [70, 15, 10, 5]
+        )
         orders.append(
             {
                 "order_id": f"{date}-{i:04d}",
@@ -208,7 +241,7 @@ def orders():
                 "commission": round(total * COMMISSION_RATE, 2),
                 "status": r.choices(
                     ["completed", "shipped", "pending", "cancelled"],
-                    weights=[70, 15, 10, 5],
+                    weights=status_weights,
                 )[0],
             }
         )
