@@ -160,6 +160,40 @@ ORDER BY derniere_vente NULLS FIRST""",
 FROM analytics.category_daily GROUP BY category ORDER BY ca DESC""",
         "bar",
     )
+    c_fraud_count = card(
+        "Commandes a prix suspect (dernier jour)",
+        """SELECT COUNT(*) FROM dwh.fact_orders f
+JOIN dwh.dim_product p ON p.product_id = f.product_id
+WHERE f.dt = (SELECT max(dt) FROM dwh.fact_orders)
+  AND ABS(f.unit_price - p.price) / p.price > 0.15""",
+        "scalar",
+    )
+    c_fraud_price = card(
+        "Prix anormaux vs catalogue",
+        """SELECT f.dt, f.order_id, s.name AS vendeur, p.name AS produit,
+       f.unit_price, p.price AS prix_catalogue,
+       ROUND(100.0 * (f.unit_price - p.price) / p.price, 1) AS ecart_pct
+FROM dwh.fact_orders f
+JOIN dwh.dim_product p ON p.product_id = f.product_id
+JOIN dwh.dim_seller s ON s.seller_id = f.seller_id
+WHERE ABS(f.unit_price - p.price) / p.price > 0.15
+ORDER BY ABS(f.unit_price - p.price) / p.price DESC
+LIMIT 50""",
+        "table",
+    )
+    c_fraud_cancel = card(
+        "Vendeurs a fort taux d'annulation (> 25%)",
+        """SELECT f.seller_id, s.name AS vendeur, s.city,
+       COUNT(*) AS commandes,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE f.status = 'cancelled')
+             / COUNT(*), 1) AS taux_annulation_pct
+FROM dwh.fact_orders f
+JOIN dwh.dim_seller s ON s.seller_id = f.seller_id
+GROUP BY f.seller_id, s.name, s.city
+HAVING 100.0 * COUNT(*) FILTER (WHERE f.status = 'cancelled') / COUNT(*) > 25
+ORDER BY taux_annulation_pct DESC""",
+        "table",
+    )
 
     # --- 5. Dashboards ----------------------------------------------------
     print("[5] creation des dashboards")
@@ -216,7 +250,10 @@ FROM analytics.category_daily GROUP BY category ORDER BY ca DESC""",
     d3 = dashboard(
         "Finance & Catalogue", [c_commissions, c_cat]
     )
-    print("    dashboards :", d1, d2, d3)
+    d4 = dashboard(
+        "Fraude potentielle", [c_fraud_count, c_fraud_price, c_fraud_cancel]
+    )
+    print("    dashboards :", d1, d2, d3, d4)
     print()
     print("OK -> http://localhost:3000  (login :", EMAIL, "/", PASSWORD, ")")
 

@@ -63,6 +63,12 @@ NB_SELLERS = 2400
 NB_PRODUCTS = 180_000
 NB_CUSTOMERS = 25_000
 
+# Comportements suspects injectes (deterministes) pour alimenter le
+# dashboard "Fraude potentielle" : ~2% de commandes a prix anormal
+# (trop bas / gonfle) + 5 vendeurs tires au sort (seed fixe) avec un
+# taux d'annulation anormal (~60% vs ~5%).
+NB_FRAUD_SELLERS = 5
+
 
 def _rng(key: str) -> random.Random:
     """RNG deterministe a partir d'un hash md5 de la cle."""
@@ -139,6 +145,10 @@ SELLERS = _gen_sellers()
 PRODUCTS = _gen_products(SELLERS)
 CUSTOMERS = _gen_customers()
 _PRODUCT_BY_ID = {p["product_id"]: p for p in PRODUCTS}
+# Tirage seede -> toujours les memes "fraudeurs" a chaque demarrage
+FRAUD_SELLERS = {
+    s["seller_id"] for s in _rng("fraud_sellers").sample(SELLERS, NB_FRAUD_SELLERS)
+}
 
 
 # ---------------------------------------------------------------------------
@@ -202,9 +212,22 @@ def orders():
         product = r.choice(PRODUCTS)
         customer = r.choice(CUSTOMERS)
         qty = r.randint(1, 2)
-        # prix parfois remise ou majoration legere
-        unit_price = round(product["price"] * r.uniform(0.9, 1.1), 2)
+        # prix parfois remise ou majoration legere (+-10%)
+        # ~2% de prix anormaux : brade (x0.4-0.75) ou gonfle (x1.6-2.5)
+        roll = r.random()
+        if roll < 0.015:
+            unit_price = round(product["price"] * r.uniform(0.4, 0.75), 2)
+        elif roll < 0.02:
+            unit_price = round(product["price"] * r.uniform(1.6, 2.5), 2)
+        else:
+            unit_price = round(product["price"] * r.uniform(0.9, 1.1), 2)
         total = round(unit_price * qty, 2)
+        # les vendeurs "fraudeurs" annulent ~60% de leurs commandes
+        status_weights = (
+            [30, 5, 5, 60]
+            if product["seller_id"] in FRAUD_SELLERS
+            else [70, 15, 10, 5]
+        )
         orders.append(
             {
                 "order_id": f"{date}-{i:04d}",
@@ -218,7 +241,7 @@ def orders():
                 "commission": round(total * COMMISSION_RATE, 2),
                 "status": r.choices(
                     ["completed", "shipped", "pending", "cancelled"],
-                    weights=[70, 15, 10, 5],
+                    weights=status_weights,
                 )[0],
             }
         )

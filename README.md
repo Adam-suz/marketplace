@@ -211,6 +211,11 @@ Dashboards créés :
 - **Top Sellers** : top 10 vendeurs du mois, évolution CA top 3, vendeurs
   inactifs > 7 jours
 - **Finance & Catalogue** (bonus) : commissions par jour, CA par catégorie
+- **Fraude potentielle** : nb de commandes à prix suspect (écart > 15 % vs
+  catalogue), top 50 des écarts de prix, vendeurs à fort taux d'annulation
+  (> 25 % vs ~5 % en moyenne). L'API injecte ~2 % de commandes à prix
+  anormal et 5 vendeurs "fraudeurs" (~60 % d'annulations) de façon
+  déterministe — le dashboard les détecte réellement.
 
 Pour le faire à la main à la place : connexion PostgreSQL, host
 `postgres-dwh` (nom Docker, pas localhost), port **interne** `5432`,
@@ -255,6 +260,10 @@ erDiagram
   unique dépasserait les limites raisonnables de taille de requête.
 - **API déterministe** (`seed = md5(date)`) : permet de prouver l'idempotence
   — vérifié : 2 runs wf2 sur la même date → `COUNT(*)` stable à 8 933.
+- **Fraude simulée** : l'API injecte ~1,5 % de prix bradés (x0,4-0,75), ~0,5 %
+  de prix gonflés (x1,6-2,5) et 5 vendeurs à ~60 % d'annulations. Détectable
+  via `fact_orders.unit_price` vs `dim_product.price` et le taux de
+  `cancelled` par vendeur — cf. dashboard "Fraude potentielle".
 
 ## Pièges connus (retours TP6 + énoncé)
 
