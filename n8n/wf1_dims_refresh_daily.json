@@ -82,7 +82,7 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "const products = $input.all()[0].json.products || [];\nconst esc = v => String(v).replace(/'/g, \"''\");\nconst vals = products.map(p => `('${p.product_id}','${esc(p.name)}','${esc(p.category)}',${p.price},'${p.seller_id}')`);\nconst query = `INSERT INTO dwh.dim_product (product_id, name, category, price, seller_id) VALUES ${vals.join(',')} ON CONFLICT (product_id) DO UPDATE SET name=EXCLUDED.name, category=EXCLUDED.category, price=EXCLUDED.price, seller_id=EXCLUDED.seller_id;`;\nreturn [{ json: { query, nb_products: products.length } }];"
+        "jsCode": "const products = $input.all()[0].json.products || [];\nconst esc = v => String(v).replace(/'/g, \"''\");\nconst CHUNK = 2000;\nconst out = [];\nfor (let i = 0; i < products.length; i += CHUNK) {\n  const vals = products.slice(i, i + CHUNK).map(p => `('${p.product_id}','${esc(p.name)}','${esc(p.category)}',${p.price},'${p.seller_id}')`);\n  out.push({ json: { query: `INSERT INTO dwh.dim_product (product_id, name, category, price, seller_id) VALUES ${vals.join(',')} ON CONFLICT (product_id) DO UPDATE SET name=EXCLUDED.name, category=EXCLUDED.category, price=EXCLUDED.price, seller_id=EXCLUDED.seller_id;`, chunk: (i / CHUNK) + 1 } });\n}\nreturn out;"
       },
       "id": "w1-prep-products",
       "name": "Preparer dim_product",

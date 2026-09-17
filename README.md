@@ -123,16 +123,25 @@ Ce que fait wf2 :
 
 ```
 Schedule → Date cible (= {{ ds }})
-  → GET /orders?date=...           (Header Auth)
-  → Preparer                       (construit les requêtes SQL)
+  → GET /orders?date=...           (Header Auth, ~8 500 lignes)
+  → Preparer                       (construit les requêtes SQL, chunks de 3 000)
   → Upload raw MinIO               (data-lake/raw/orders/dt=YYYY-MM-DD/orders.json)
   → DELETE staging.orders WHERE dt (purge partition)
-  → INSERT staging.orders          (load)
+  → Batcher staging                (émet 1 item par chunk d'INSERT)
+  → INSERT staging.orders          (s'exécute une fois par chunk)
+  → Fin staging                    (re-compacte en 1 item — évite de rejouer les faits)
   → DELETE dwh.fact_orders WHERE dt
   → INSERT dwh.fact_orders         (transform, jointures dims)
   → Execute Workflow → wf4         (UPSERT daily_summary / seller_daily / category_daily)
   → INSERT file_ingestion_log
 ```
+
+> **Batching** : à ~8 500 commandes/jour, un seul `INSERT` géant serait trop lourd
+> (taille de requête). `Preparer` découpe en chunks, `Batcher staging` émet un
+> item par chunk → le nœud Postgres s'exécute une fois par chunk.
+> `Fin staging` re-compacte en **1 item** : sans lui, les nœuds suivants se
+> ré-exécuteraient une fois par chunk et `INSERT fact_orders` tournerait 3 fois
+> → triplons malgré le DELETE+INSERT.
 
 wf4 est découplé de wf2 (déclenché par `Execute Workflow Trigger`) : c'est
 l'équivalent du DAG `marketplace_analytics_aggregate_daily` "asset-scheduled"
@@ -239,8 +248,13 @@ erDiagram
 - **MinIO en raw layer** : le JSON brut est rejouable si la transform a un bug,
   sans re-solliciter l'API (pattern data lake first, cf. TP5/TP6).
 - **API déterministe** (`seed = md5(date)`) : permet de prouver l'idempotence.
-- Volumétrie réduite (~80-200 commandes/jour, 200 vendeurs, 500 produits) :
-  suffisant pour démontrer le pipeline sans charger la machine.
+- **Volumétrie réelle du cahier des charges** : 2 400 vendeurs, 180 000
+  produits, ~8 500 commandes/jour, CA ~140 k€/jour ≈ 4,2 M€/mois
+  (panier moyen ~17 €). wf1 insère les produits par chunks de 2 000 (~90
+  requêtes) et wf2 le staging par chunks de 3 000 : à ce volume, un INSERT
+  unique dépasserait les limites raisonnables de taille de requête.
+- **API déterministe** (`seed = md5(date)`) : permet de prouver l'idempotence
+  — vérifié : 2 runs wf2 sur la même date → `COUNT(*)` stable à 8 933.
 
 ## Pièges connus (retours TP6 + énoncé)
 
