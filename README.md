@@ -58,10 +58,8 @@ marketplace/
 │   ├── wf1_dims_refresh_daily.json    # upsert dim_seller + dim_product
 │   ├── wf2_orders_ingest_daily.json   # pipeline principal extract→raw→staging→dwh
 │   ├── wf3_anomaly_detect_daily.json  # bonus : alerte si CA < 70% moyenne 7j
-│   ├── wf4_analytics_aggregate.json   # agrégats analytics (appelé par wf2)
-│   └── export/            # export complet (workflows + credentials) -> import auto
+│   └── wf4_analytics_aggregate.json   # agrégats analytics (appelé par wf2)
 ├── scripts/
-│   ├── bootstrap_n8n.sh    # importe workflows + credentials dans n8n en 1 commande
 │   ├── verifier.sh         # vérifs services + idempotence
 │   └── setup_metabase.py   # setup Metabase auto (compte, DWH, dashboards)
 └── tests/
@@ -95,18 +93,6 @@ curl -H "Authorization: Bearer formation-token-2026" \
 ```
 
 ## Configuration n8n (une seule fois)
-
-**Voie rapide** — l'export `n8n/export/` contient les 4 workflows avec les 3
-credentials déjà rattachés :
-
-```bash
-bash scripts/bootstrap_n8n.sh   # importe tout dans n8n (après docker compose up)
-```
-
-Reste ensuite : ouvrir http://localhost:5678, activer les workflows (toggle
-Active) et exécuter wf1 puis wf2.
-
-**Voie manuelle** (si l'export n'est pas utilisé) :
 
 1. Ouvrir http://localhost:5678, créer le compte owner.
 2. Créer **3 credentials** (menu Credentials → Add credential) :
