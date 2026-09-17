@@ -199,8 +199,12 @@ ORDER BY taux_annulation_pct DESC""",
     print("[5] creation des dashboards")
 
     def dashboard(name, cards):
+        # creer le dashboard vide, puis rattacher les cards via PUT
+        # (le param 'dashcards' du POST est ignore par Metabase v0.59)
+        r = s.post(f"{MB}/api/dashboard", json={"name": name}, timeout=30)
+        r.raise_for_status()
+        did = r.json()["id"]
         dashcards = []
-        pos = 0
         for i, cid in enumerate(cards):
             w, h = (8, 6) if len(cards) > 1 else (12, 6)
             x = (i % 2) * w if len(cards) > 2 else (i % 3) * 8
@@ -215,31 +219,11 @@ ORDER BY taux_annulation_pct DESC""",
                     "size_y": h,
                 }
             )
-            pos += 1
-        r = s.post(
-            f"{MB}/api/dashboard",
-            json={"name": name, "dashcards": dashcards},
-            timeout=30,
+        r = s.put(
+            f"{MB}/api/dashboard/{did}", json={"dashcards": dashcards}, timeout=30
         )
-        if r.status_code not in (200, 201):
-            # fallback : dashboard vide puis ajout des cards
-            r = s.post(f"{MB}/api/dashboard", json={"name": name}, timeout=30)
-            r.raise_for_status()
-            did = r.json()["id"]
-            for i, cid in enumerate(cards):
-                s.post(
-                    f"{MB}/api/dashboard/{did}/cards",
-                    json={
-                        "cardId": cid,
-                        "row": (i // 2) * 6,
-                        "col": (i % 2) * 8,
-                        "size_x": 8,
-                        "size_y": 6,
-                    },
-                    timeout=15,
-                )
-            return did
-        return r.json()["id"]
+        r.raise_for_status()
+        return did
 
     d1 = dashboard(
         "Executive Summary", [c_ca_day, c_ca_30, c_top5_day]
